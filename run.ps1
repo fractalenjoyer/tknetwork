@@ -1,2 +1,2 @@
-start powershell
-start powershell
+start pwsh
+start pwsh
