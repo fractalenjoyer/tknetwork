@@ -1,2 +1,0 @@
-start pwsh
-start pwsh
