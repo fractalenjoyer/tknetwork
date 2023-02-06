@@ -10,8 +10,9 @@ def connect(address):
 def hello_name(data):
     print(data)
 
-# net.tcp_server()
-net.udp_server()
+net.tcp_server()
+# net.udp_server()
+net.connect("127.0.0.1", 5000)
 
 while (i := input(">> ")) != "exit":
     net.emit("print", i)
