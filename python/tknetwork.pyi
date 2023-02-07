@@ -6,6 +6,7 @@ class EventManager:
     def trigger(name: str, *args, **kwargs): ...
 
 class Peer:
+    address: str
     events: EventManager
     def emit(self, event: str, data: str): ...
 

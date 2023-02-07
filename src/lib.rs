@@ -70,11 +70,12 @@ impl EventManager {
         name: &str,
         args: &PyTuple,
         kwargs: Option<&PyDict>,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         if let Some(event) = self.events.get(name) {
             event.borrow(py).call(py, args, kwargs)?;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
@@ -96,6 +97,8 @@ struct Message {
 #[pyclass]
 struct Peer {
     #[pyo3(get)]
+    address: String,
+    #[pyo3(get)]
     events: Py<EventManager>,
     global_events: Py<EventManager>,
     read: TcpStream,
@@ -111,12 +114,14 @@ impl Peer {
         args: &PyTuple,
         kwargs: Option<&PyDict>,
     ) -> PyResult<()> {
-        if let Some(event) = self.events.borrow(py).events.get(name) {
-            event.borrow(py).call(py, args, kwargs)?;
-        } else if let Some(event) = self.global_events.borrow(py).events.get(name) {
-            event.borrow(py).call(py, args, kwargs)?;
+        if self.events.borrow(py).trigger(py, name, args, kwargs)? {
+            Ok(())
+        } else {
+            self.global_events
+                .borrow(py)
+                .trigger(py, name, args, kwargs)?;
+            Ok(())
         }
-        Ok(())
     }
 
     fn emit(&mut self, event: String, data: String) -> PyResult<()> {
@@ -136,8 +141,9 @@ impl Peer {
         let peer = Py::new(
             py,
             Peer {
+                address: socket.local_addr().unwrap().to_string(),
                 events: Py::new(py, EventManager::new()).unwrap(),
-                global_events,
+                global_events: global_events.clone_ref(py),
                 read: socket.try_clone().unwrap(),
                 write: socket,
             },
@@ -152,6 +158,13 @@ impl Peer {
             };
         });
 
+        global_events.borrow(py).trigger(
+            py,
+            "new_peer",
+            PyTuple::new(py, &[peer.clone_ref(py)]),
+            None,
+        )?;
+
         Ok(peer)
     }
 
@@ -161,11 +174,29 @@ impl Peer {
             let bytes_read = match socket.read(&mut buffer) {
                 Ok(bytes_read) => bytes_read,
                 Err(_) => {
-                    println!("User left");
-                    return Err(());
+                    return Python::with_gil(|py| {
+                        match peer.borrow(py).trigger(
+                            py,
+                            &"peer_disconnect",
+                            &PyTuple::new(py, &[peer.clone_ref(py)]),
+                            None,
+                        ) {
+                            Ok(_) => Err(()),
+                            Err(e) => {
+                                println!("Error: {}", e);
+                                Err(())
+                            }
+                        }
+                    });
                 }
             };
-            let message: Message = serde_json::from_slice(&buffer[..bytes_read]).unwrap();
+            let message: Message = match serde_json::from_slice(&buffer[..bytes_read]) {
+                Ok(message) => message,
+                Err(e) => {
+                    println!("Error: {}", e);
+                    continue;
+                }
+            };
 
             Python::with_gil(|py| {
                 let args = PyTuple::new(py, &[message.data]);
@@ -282,7 +313,12 @@ impl Network {
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
-        let mut repr = format!("Network(IP: {}, Port: {}, Events: {}", self.ip, self.port, self.events.borrow(py).__repr__(py)?);
+        let mut repr = format!(
+            "Network(IP: {}, Port: {}, Events: {}",
+            self.ip,
+            self.port,
+            self.events.borrow(py).__repr__(py)?
+        );
         repr.push_str("Peers: [");
         for peer in &self.peers {
             repr.push_str(&format!("{}, ", peer.borrow(py).__repr__(py)?));
