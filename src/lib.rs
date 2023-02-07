@@ -86,6 +86,18 @@ struct Peer {
     write: TcpStream,
 }
 
+fn new_peer(py: Python, global_events: Py<EventManager>, socket: TcpStream) -> PyResult<Py<Peer>> {
+    Ok(Py::new(
+        py,
+        Peer {
+            events: Py::new(py, EventManager::new())?,
+            global_events,
+            read: Arc::new(Mutex::new(socket.try_clone()?)),
+            write: socket,
+        },
+    )?)
+}
+
 #[pymethods]
 impl Peer {
     fn connect(&self, py: Python, address: &str) -> PyResult<()> {
@@ -171,17 +183,9 @@ impl Network {
     }
 
     fn tcp_connect(&mut self, py: Python, ip: &str, port: u16) -> PyResult<()> {
-        let read = TcpStream::connect((ip, port))?;
-        let write = read.try_clone()?;
-        let peer = Py::new(
-            py,
-            Peer {
-                events: Py::new(py, EventManager::new())?,
-                global_events: self.events.clone_ref(py),
-                read: Arc::new(Mutex::new(read)),
-                write,
-            },
-        )?;
+        let socket = TcpStream::connect((ip, port))?;
+        let peer = new_peer(py, self.events.clone_ref(py), socket)?;
+
         Peer::listen(peer.borrow(py))?;
         self.peers.push(peer.clone_ref(py));
         Ok(())
@@ -212,14 +216,7 @@ impl Network {
 
         thread::spawn(move || {
             for stream in listener.incoming() {
-                let read = match stream {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        println!("Error: {}", e);
-                        continue;
-                    }
-                };
-                let write = match read.try_clone() {
+                let socket = match stream {
                     Ok(stream) => stream,
                     Err(e) => {
                         println!("Error: {}", e);
@@ -227,15 +224,7 @@ impl Network {
                     }
                 };
                 Python::with_gil(|py| {
-                    let peer = match Py::new(
-                        py,
-                        Peer {
-                            events: Py::new(py, EventManager::new()).unwrap(),
-                            global_events: slf.borrow(py).events.clone_ref(py),
-                            read: Arc::new(Mutex::new(read)),
-                            write,
-                        },
-                    ) {
+                    let peer = match new_peer(py, slf.borrow(py).events.clone_ref(py), socket) {
                         Ok(peer) => peer,
                         Err(e) => {
                             println!("Error: {}", e);
@@ -271,8 +260,7 @@ impl Network {
                     let port = slf.port;
                     slf.emit(py, "connect".to_string(), address.clone())
                         .unwrap();
-                    slf.tcp_connect(py, address.as_str(), port)
-                        .unwrap();
+                    slf.tcp_connect(py, address.as_str(), port).unwrap();
                 });
             }
         });
