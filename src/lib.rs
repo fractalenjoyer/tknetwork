@@ -33,6 +33,14 @@ impl Event {
         }
         Ok(())
     }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        if let Some(callback) = &self.callback {
+            Ok(format!("Event({})", callback.getattr(py, "__name__")?))
+        } else {
+            Ok("Event(None)".to_string())
+        }
+    }
 }
 
 #[pyclass]
@@ -68,6 +76,15 @@ impl EventManager {
         }
         Ok(())
     }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        let mut repr = "EventManager(".to_string();
+        for (name, event) in &self.events {
+            repr.push_str(&format!("{}: {}, ", name, event.borrow(py).__repr__(py)?));
+        }
+        repr.push(')');
+        Ok(repr)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -85,16 +102,8 @@ struct Peer {
     write: TcpStream,
 }
 
-
 #[pymethods]
 impl Peer {
-    fn connect(&self, py: Python, address: &str) -> PyResult<()> {
-        self.global_events
-            .borrow(py)
-            .trigger(py, "connect", PyTuple::new(py, &[address]), None)?;
-        Ok(())
-    }
-
     fn trigger(
         &self,
         py: Python,
@@ -109,16 +118,30 @@ impl Peer {
         }
         Ok(())
     }
+
+    fn emit(&mut self, event: String, data: String) -> PyResult<()> {
+        let message = Message { event, data };
+        let message = serde_json::to_string(&message).unwrap();
+        self.write.write(message.as_bytes())?;
+        Ok(())
+    }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        Ok(format!("Peer({})", self.events.borrow(py).__repr__(py)?))
+    }
 }
 
 impl Peer {
     fn new(py: Python, global_events: Py<EventManager>, socket: TcpStream) -> PyResult<Py<Self>> {
-        let peer = Py::new(py, Peer {
-            events: Py::new(py, EventManager::new()).unwrap(),
-            global_events,
-            read: socket.try_clone().unwrap(),
-            write: socket,
-        })?;
+        let peer = Py::new(
+            py,
+            Peer {
+                events: Py::new(py, EventManager::new()).unwrap(),
+                global_events,
+                read: socket.try_clone().unwrap(),
+                write: socket,
+            },
+        )?;
 
         let peer_clone: Py<Peer> = peer.clone_ref(py);
         let socket = peer.borrow(py).read.try_clone()?;
@@ -132,13 +155,13 @@ impl Peer {
         Ok(peer)
     }
 
-    fn listen(peer: Py<Peer>, mut socket: TcpStream) -> Result<(), ()>{
+    fn listen(peer: Py<Peer>, mut socket: TcpStream) -> Result<(), ()> {
         let mut buffer = [0; 1024];
         loop {
             let bytes_read = match socket.read(&mut buffer) {
                 Ok(bytes_read) => bytes_read,
                 Err(_) => {
-                    println!("Used left");
+                    println!("User left");
                     return Err(());
                 }
             };
@@ -179,7 +202,7 @@ impl Network {
     }
 
     fn connect(&mut self, ip: &str, port: u16) -> PyResult<()> {
-        let socket = UdpSocket::bind("127.0.0.1:7337")?;
+        let socket = UdpSocket::bind("0.0.0.0:7337")?;
         socket.send_to(&[0], (ip, port))?;
         Ok(())
     }
@@ -192,20 +215,12 @@ impl Network {
     }
 
     fn emit(&mut self, py: Python, event: String, data: String) -> PyResult<()> {
-        let message = Message { event, data };
-        let message = serde_json::to_string(&message).unwrap();
-        self.peers.retain(|peer| {
-            let mut socket = &peer.borrow(py).write;
-            match socket.write(message.as_bytes()) {
+        self.peers.retain(
+            |peer| match peer.borrow_mut(py).emit(event.clone(), data.clone()) {
                 Ok(_) => true,
-                Err(_) => {
-                    peer.borrow(py)
-                        .trigger(py, "disconnect", PyTuple::new(py, &["buh bye"]), None)
-                        .unwrap();
-                    false
-                }
-            }
-        });
+                Err(_) => false,
+            },
+        );
         Ok(())
     }
 
@@ -264,5 +279,15 @@ impl Network {
         });
 
         Ok(())
+    }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        let mut repr = format!("Network(IP: {}, Port: {}, Events: {}", self.ip, self.port, self.events.borrow(py).__repr__(py)?);
+        repr.push_str("Peers: [");
+        for peer in &self.peers {
+            repr.push_str(&format!("{}, ", peer.borrow(py).__repr__(py)?));
+        }
+        repr.push_str("])");
+        Ok(repr)
     }
 }

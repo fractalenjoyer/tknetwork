@@ -1,10 +1,11 @@
-from tknetwork import Network
+from tknetwork import Network, Peer
 
 net = Network("0.0.0.0", 5000)
 
 @net.events.bind("connect")
 def connect(address):
     net.tcp_connect(address, 5000)
+
 
 @net.events.bind("print")
 def hello_name(data):
@@ -15,3 +16,4 @@ net.udp_server()
 
 while (i := input(">> ")) != "exit":
     net.emit("print", i)
+    

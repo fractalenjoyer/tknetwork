@@ -12,7 +12,7 @@ def hello_name(data):
 
 net.tcp_server()
 # net.udp_server()
-net.connect("127.0.0.1", 5000)
+net.connect("10.32.35.128", 5000)
 
 while (i := input(">> ")) != "exit":
     net.emit("print", i)
