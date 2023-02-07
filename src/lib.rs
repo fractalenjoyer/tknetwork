@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Read, Write, BufReader};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::thread;
 
@@ -125,8 +125,8 @@ impl Peer {
     }
 
     fn emit(&mut self, event: String, data: String) -> PyResult<()> {
-        let message = Message { event, data };
-        let message = serde_json::to_string(&message).unwrap();
+        let mut message = serde_json::to_string(&Message { event, data }).unwrap();
+        message.push(char::from(0x4));
         self.write.write(message.as_bytes())?;
         Ok(())
     }
@@ -168,8 +168,10 @@ impl Peer {
         Ok(peer)
     }
 
-    fn listen(peer: Py<Peer>, mut socket: TcpStream) -> Result<(), ()> {
+    fn listen(peer: Py<Peer>, socket: TcpStream) -> Result<(), ()> {
         let mut buffer = [0; 1024];
+        let mut socket = BufReader::new(socket);
+
         loop {
             let bytes_read = match socket.read(&mut buffer) {
                 Ok(bytes_read) => bytes_read,
@@ -190,24 +192,39 @@ impl Peer {
                     });
                 }
             };
-            let message: Message = match serde_json::from_slice(&buffer[..bytes_read]) {
-                Ok(message) => message,
-                Err(e) => {
-                    println!("Error: {}", e);
-                    continue;
-                }
-            };
-
-            Python::with_gil(|py| {
-                let args = PyTuple::new(py, &[message.data]);
-                match peer.borrow(py).trigger(py, &message.event, args, None) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("Error: {}", e);
+            let mut message_buffer = Vec::new();
+            for char in buffer[..bytes_read].iter() {
+                match char {
+                    0x4 => {
+                        Self::decode_message(&peer, &message_buffer);
+                        message_buffer.clear();
+                    }
+                    _ => {
+                        message_buffer.push(*char);
                     }
                 }
-            })
+            }
         }
+    }
+
+    fn decode_message(peer: &Py<Peer>, buffer: &[u8]) {
+        let message: Message = match serde_json::from_slice(&buffer) {
+            Ok(message) => message,
+            Err(_) => {
+                println!("Error: Malformed packet");
+                return;
+            }
+        };
+
+        Python::with_gil(|py| {
+            let args = PyTuple::new(py, &[message.data]);
+            match peer.borrow(py).trigger(py, &message.event, args, None) {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        });
     }
 }
 
