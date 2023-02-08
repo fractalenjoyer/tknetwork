@@ -5,8 +5,9 @@ include!(concat!(env!("OUT_DIR"), "/module.rs"));
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Write, BufReader};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::thread;
 
@@ -102,7 +103,7 @@ struct Peer {
     events: Py<EventManager>,
     global_events: Py<EventManager>,
     read: TcpStream,
-    write: TcpStream,
+    write: RefCell<TcpStream>,
 }
 
 #[pymethods]
@@ -124,10 +125,10 @@ impl Peer {
         }
     }
 
-    fn emit(&mut self, event: String, data: String) -> PyResult<()> {
+    fn emit(&self, event: String, data: String) -> PyResult<()> {
         let mut message = serde_json::to_string(&Message { event, data }).unwrap();
         message.push(char::from(0x4));
-        self.write.write(message.as_bytes())?;
+        self.write.borrow_mut().write(message.as_bytes())?;
         Ok(())
     }
 
@@ -137,7 +138,11 @@ impl Peer {
 }
 
 impl Peer {
-    fn new(py: Python, global_events: Py<EventManager>, socket: TcpStream) -> PyResult<Py<Self>> {
+    fn new(
+        py: Python,
+        global_events: Py<EventManager>,
+        socket: TcpStream,
+    ) -> PyResult<Py<Self>> {
         let peer = Py::new(
             py,
             Peer {
@@ -145,7 +150,7 @@ impl Peer {
                 events: Py::new(py, EventManager::new()).unwrap(),
                 global_events: global_events.clone_ref(py),
                 read: socket.try_clone().unwrap(),
-                write: socket,
+                write: RefCell::new(socket),
             },
         )?;
 
@@ -168,9 +173,8 @@ impl Peer {
         Ok(peer)
     }
 
-    fn listen(peer: Py<Peer>, socket: TcpStream) -> Result<(), ()> {
+    fn listen(peer: Py<Peer>, mut socket: TcpStream) -> Result<(), ()> {
         let mut buffer = [0; 1024];
-        let mut socket = BufReader::new(socket);
 
         loop {
             let bytes_read = match socket.read(&mut buffer) {
@@ -264,7 +268,7 @@ impl Network {
 
     fn emit(&mut self, py: Python, event: String, data: String) -> PyResult<()> {
         self.peers.retain(
-            |peer| match peer.borrow_mut(py).emit(event.clone(), data.clone()) {
+            |peer| match peer.borrow(py).emit(event.clone(), data.clone()) {
                 Ok(_) => true,
                 Err(_) => false,
             },
