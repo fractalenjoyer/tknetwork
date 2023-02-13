@@ -9,10 +9,13 @@ class Canvas:
     def __init__(self, network: Network) -> None:
         self.prev_point = {}
         self.colors = {}
+
         self.root = tk.Tk()
-        self.canvas = tk.Canvas(self.root, height=800, width=800, bg="white")
+        self.root.resizable(False, False)
+        self.canvas = tk.Canvas(self.root, height=700, width=700, bg="white")
         self.canvas.pack()
         self.network = network
+
         self.canvas.bind("<B1-Motion>", lambda event: self.__draw(event, True))
         self.canvas.bind("<1>", lambda event: self.__draw(event, False))
         self.canvas.bind("<B3-Motion>", self.__erase)

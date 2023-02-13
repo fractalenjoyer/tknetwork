@@ -24,9 +24,10 @@ def connect(address):
 
 
 if __name__ == "__main__":
-    network.udp_server()
+    if len(argv) == 1:
+        network.udp_server()
 
-    if len(argv) >= 3 and argv[1] == "-c":
+    elif len(argv) >= 3 and argv[1] == "-c":
         network.tcp_server()
         network.connect(argv[2], 5000)
 

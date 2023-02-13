@@ -7,7 +7,7 @@ use serde_json;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::thread;
 
@@ -128,25 +128,26 @@ impl Peer {
     fn emit(&self, event: String, data: String) -> PyResult<()> {
         let mut message = serde_json::to_string(&Message { event, data }).unwrap();
         message.push(char::from(0x4));
-        self.write.borrow_mut().write(message.as_bytes())?;
+        self.write.borrow_mut().write_all(message.as_bytes())?;
         Ok(())
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
-        Ok(format!("Peer({})", self.events.borrow(py).__repr__(py)?))
+        Ok(format!("Peer({}, {})", self.address, self.events.borrow(py).__repr__(py)?))
     }
 }
 
 impl Peer {
     fn new(
         py: Python,
+        address: String,
         global_events: Py<EventManager>,
         socket: TcpStream,
     ) -> PyResult<Py<Self>> {
         let peer = Py::new(
             py,
             Peer {
-                address: socket.local_addr().unwrap().to_string(),
+                address,
                 events: Py::new(py, EventManager::new()).unwrap(),
                 global_events: global_events.clone_ref(py),
                 read: socket.try_clone().unwrap(),
@@ -173,42 +174,28 @@ impl Peer {
         Ok(peer)
     }
 
-    fn listen(peer: Py<Peer>, mut socket: TcpStream) -> Result<(), ()> {
-        let mut buffer = [0; 1024];
+    fn listen(peer: Py<Peer>, socket: TcpStream) -> Result<(), ()> {
+        let reader = BufReader::new(socket);
 
-        loop {
-            let bytes_read = match socket.read(&mut buffer) {
-                Ok(bytes_read) => bytes_read,
+        for line in reader.split(0x4) {
+            let line = match line {
+                Ok(line) => line,
                 Err(_) => {
-                    return Python::with_gil(|py| {
-                        match peer.borrow(py).trigger(
+                    Python::with_gil(|py| {
+                        peer.borrow(py).trigger(
                             py,
                             &"peer_disconnect",
                             &PyTuple::new(py, &[peer.clone_ref(py)]),
                             None,
-                        ) {
-                            Ok(_) => Err(()),
-                            Err(e) => {
-                                println!("Error: {}", e);
-                                Err(())
-                            }
-                        }
-                    });
+                        )
+                    })
+                    .unwrap();
+                    return Ok(());
                 }
             };
-            let mut message_buffer = Vec::new();
-            for char in buffer[..bytes_read].iter() {
-                match char {
-                    0x4 => {
-                        Self::decode_message(&peer, &message_buffer);
-                        message_buffer.clear();
-                    }
-                    _ => {
-                        message_buffer.push(*char);
-                    }
-                }
-            }
+            Self::decode_message(&peer, &line);
         }
+        Ok(())
     }
 
     fn decode_message(peer: &Py<Peer>, buffer: &[u8]) {
@@ -259,10 +246,15 @@ impl Network {
         Ok(())
     }
 
-    fn tcp_connect(&mut self, py: Python, ip: &str, port: u16) -> PyResult<()> {
-        let socket = TcpStream::connect((ip, port))?;
-        let peer = Peer::new(py, self.events.clone_ref(py), socket)?;
-        self.peers.push(peer.clone_ref(py));
+    fn tcp_connect(&mut self, py: Python, ip: String, port: u16) -> PyResult<()> {
+        let socket = TcpStream::connect((ip.clone(), port))?;
+        let peer = Peer::new(
+            py,
+            format!("{}:{}", ip, port),
+            self.events.clone_ref(py),
+            socket,
+        )?;
+        self.peers.push(peer);
         Ok(())
     }
 
@@ -290,7 +282,12 @@ impl Network {
                     }
                 };
                 Python::with_gil(|py| {
-                    let peer = match Peer::new(py, slf.borrow(py).events.clone_ref(py), socket) {
+                    let peer = match Peer::new(
+                        py,
+                        socket.peer_addr().unwrap().to_string(),
+                        slf.borrow(py).events.clone_ref(py),
+                        socket,
+                    ) {
                         Ok(peer) => peer,
                         Err(e) => {
                             println!("Error: {}", e);
@@ -325,7 +322,7 @@ impl Network {
                     let port = slf.port;
                     slf.emit(py, "connect".to_string(), address.clone())
                         .unwrap();
-                    slf.tcp_connect(py, address.as_str(), port).unwrap();
+                    slf.tcp_connect(py, address, port).unwrap();
                 });
             }
         });
