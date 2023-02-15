@@ -5,7 +5,7 @@ include!(concat!(env!("OUT_DIR"), "/module.rs"));
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use std::cell::RefCell;
+use std::cell::{RefCell, Cell};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -46,6 +46,7 @@ struct Message {
 
 #[pyclass]
 struct Peer {
+    #[pyo3(get)]
     name: String,
     stream: RefCell<TcpStream>,
     sender: Sender<ThreadMessage>,
@@ -149,7 +150,7 @@ impl Peer {
 struct Network {
     address: String,
     port: u16,
-    receiver: Receiver<ThreadMessage>,
+    receiver: Cell<Receiver<ThreadMessage>>,
     sender: Sender<ThreadMessage>,
     peers: Vec<Py<Peer>>,
 }
@@ -162,7 +163,7 @@ impl Network {
         Self {
             address,
             port,
-            receiver,
+            receiver: Cell::new(receiver),
             sender,
             peers: Vec::new(),
         }
@@ -182,16 +183,118 @@ impl Network {
 
     #[pyo3(signature = (debug = (false, false)))]
     fn serve(slf: PyRef<'_, Self>, py: Python, debug: (bool, bool)) {
-        let slf: Py<Self> = slf.into();
+        let ip = slf.address.clone();
+        let port = slf.port;
+        let network: Py<Self> = slf.into();
 
+        {
+            let slf = network.clone_ref(py);
+            thread::spawn(move || Self::listen(slf));
+        };
         if !debug.0 {
-            thread::spawn(|| Self::tcp_server(slf.clone_ref(py)));
-        } 
+            let slf = network.clone_ref(py);
+            let ip = ip.clone();
+            thread::spawn(move || Self::tcp_server(slf, ip, port));
+        };
         if !debug.1 {
-            thread::spawn(|| Self::udp_server(slf.clone_ref(py)));
-        }
+            let slf = network.clone_ref(py);
+            let ip = ip.clone();
+            thread::spawn(move || Self::udp_server(slf, ip, port));
+        };
     }
 }
 
 impl Network {
+    fn tcp_server(slf: Py<Self>, ip: String, port: u16) {
+        let listener = TcpListener::bind((ip, port)).unwrap();
+
+        for stream in listener.incoming() {
+            let socket = match stream {
+                Ok(socket) => socket,
+                Err(_) => continue,
+            };
+
+            Python::with_gil(|py| {
+                let mut slf = slf.borrow_mut(py);
+
+                if let Ok(peer) = Peer::new(
+                    py,
+                    socket.peer_addr().unwrap().to_string(),
+                    socket,
+                    slf.sender.clone(),
+                ) {
+                    slf.peers.push(peer);
+                } else {
+                    println!("Error: Failed to create peer");
+                }
+            })
+        }
+    }
+
+    fn udp_server(slf: Py<Self>, ip: String, port: u16) {
+        let socket = UdpSocket::bind((ip, port)).unwrap();
+
+        loop {
+            let mut buffer = [0; 1024];
+            let (_bytes_read, address) = match socket.recv_from(&mut buffer) {
+                Ok((bytes_read, address)) => (bytes_read, address),
+                Err(e) => {
+                    println!("Error: {}", e);
+                    continue;
+                }
+            };
+
+            Python::with_gil(|py| {
+                let mut slf = slf.borrow_mut(py);
+                let address = format!("{}", address.ip());
+                let port = slf.port;
+                slf.emit(py, "connection_request".to_string(), address.clone())
+                    .unwrap();
+                slf.tcp_connect(py, address, port).unwrap();
+            });
+
+        }
+    }
+
+    fn tcp_connect(&mut self, py: Python, ip: String, port: u16) -> PyResult<()> {
+        let socket = TcpStream::connect((ip.clone(), port))?;
+
+        if let Ok(peer) = Peer::new(
+            py,
+            format!("{}:{}", ip, port),
+            socket,
+            self.sender.clone()) {
+            self.peers.push(peer);
+        };
+        Ok(())
+    }
+
+    fn listen(slf: Py<Self>) {
+        // genuinely send help
+        let (_, please_kill_me) = channel();
+        let receiver = Python::with_gil(|py| {
+            let swapper = Cell::new(please_kill_me);
+            slf.borrow(py).receiver.swap(&swapper);
+            swapper.into_inner()
+            }
+        );
+        
+        for message in receiver.iter() {
+            match message.event.as_str() {
+                "connection_request" => {
+                    Python::with_gil(|py| {
+                        let mut slf = slf.borrow_mut(py);
+                        let port = slf.port;
+                        slf.tcp_connect(py, message.data.unwrap(), port).unwrap();
+                    })
+                }
+                "disconnect" => {
+                    println!("Disconnected");
+                }
+                _ => {
+                    println!("{}: {}", message.event, message.data.unwrap());
+                }
+            }
+        }
+    }
 }
