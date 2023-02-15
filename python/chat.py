@@ -4,31 +4,27 @@ from sys import argv
 network = Network("0.0.0.0", 5000)
 
 
-@network.events.bind("new_peer")
+@network.on("connect")
 def connection(peer: Peer):
-    print(f"\nPeer <{peer.address}> connected\n>> ", end="")
+    print(f"\nPeer <{peer.name}> connected\n>> ", end="")
 
-    @peer.events.bind("print")
+    @peer.on("print")
     def hello_name(data):
-        print(f"\n<{peer.address}>: {data}\n>> ", end="")
+        print(f"\n<{peer.name}>: {data}\n>> ", end="")
 
 
-@network.events.bind("peer_disconnect")
+@network.on("disconnect")
 def disconnect(peer: Peer):
-    print(f"\nPeer <{peer.address}> disconnected\n>> ", end="")
-
-
-@network.events.bind("connect")
-def connect(address):
-    network.tcp_connect(address, 5000)
+    print(f"\nPeer <{peer.name}> disconnected\n>> ", end="")
 
 
 if __name__ == "__main__":
     if len(argv) == 1:
-        network.udp_server()
+        network.serve((True, False))
+    else:
+        network.serve((False, True))
 
-    elif len(argv) >= 3 and argv[1] == "-c":
-        network.tcp_server()
+    if len(argv) >= 3 and argv[1] == "-c":
         network.connect(argv[2], 5000)
 
     while (i := input(">> ")) != "exit":

@@ -54,37 +54,34 @@ class Canvas:
 net = Network("0.0.0.0", 5000)
 
 
-@net.events.bind("connect")
-def connect(address):
-    net.tcp_connect(address, 5000)
 
-
-@net.events.bind("new_peer")
+@net.on("connect")
 def connection(peer):
-    print(f"Peer <{peer.address}> connected")
+    print(f"Peer <{peer.name}> connected")
 
-    @peer.events.bind("draw")
+    @peer.on("draw")
     def draw(data):
         canvas.draw(loads(data), peer)
 
-    @peer.events.bind("erase")
+    @peer.on("erase")
     def erase(data):
         canvas.erase(loads(data))
 
 
-@net.events.bind("peer_disconnect")
+@net.on("disconnect")
 def disconnect(peer):
-    print(f"Peer <{peer.address}> disconnected")
+    print(f"Peer <{peer.name}> disconnected")
 
 
 if __name__ == "__main__":
     canvas = Canvas(net)
 
     if len(argv) == 1:
-        net.udp_server()
+        net.serve((True, False))
+    else:
+        net.serve((False, True))
 
-    elif len(argv) >= 3 and argv[1] == "-c":
-        net.tcp_server()
+    if len(argv) >= 3 and argv[1] == "-c":
         net.connect(argv[2], 5000)
 
     canvas.start()

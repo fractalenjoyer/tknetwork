@@ -3,7 +3,7 @@ from json import dumps, loads
 
 net = Network("0.0.0.0", 5000)
 
-net.tcp_server()
+net.serve((False, True))
 
 net.connect("127.0.0.1", 5000)
 
