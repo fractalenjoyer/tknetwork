@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::sync::mpsc::{Sender, Receiver, channel};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 #[pyclass]
@@ -98,26 +98,24 @@ impl Peer {
             event: "connect".to_string(),
             peer: Some(peer.clone_ref(py)),
             data: "".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         Ok(peer)
     }
 
-    fn trigger(
-        &self,
-        py: Python,
-        name: &str,
-        data: String,
-    ) -> PyResult<()> {
+    fn trigger(&self, py: Python, name: &str, data: String) -> PyResult<()> {
         let args = PyTuple::new(py, &[&data]);
         if let Some(event) = self.events.get(name) {
             event.borrow(py).call(py, args, None)?;
         }
-        self.tx.send(ThreadMessage {
-            event: name.to_string(),
-            peer: None,
-            data,
-        }).unwrap();
+        self.tx
+            .send(ThreadMessage {
+                event: name.to_string(),
+                peer: None,
+                data,
+            })
+            .unwrap();
         Ok(())
     }
 
@@ -129,16 +127,14 @@ impl Peer {
                 Self::decode_message(&peer, &buffer)
             } else {
                 Python::with_gil(|py| {
-                    peer.borrow(py).tx.send(
-                        ThreadMessage {
-                            event: "disconnect".to_string(),
-                            peer: Some(peer.clone_ref(py)),
-                            data: "".to_string(),
-                        }
-                    )
+                    peer.borrow(py).tx.send(ThreadMessage {
+                        event: "disconnect".to_string(),
+                        peer: Some(peer.clone_ref(py)),
+                        data: "".to_string(),
+                    })
                 })
                 .unwrap();
-                break
+                break;
             }
         }
         Ok(())
@@ -252,9 +248,10 @@ impl Network {
                     }
                 }
             });
-        };
+        }
         Ok(())
     }
+    
     fn tcp_connect(&mut self, py: Python, ip: String, port: u16) -> PyResult<()> {
         let socket = TcpStream::connect((ip.clone(), port))?;
         let peer = Peer::new(
