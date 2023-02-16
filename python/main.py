@@ -23,7 +23,7 @@ class Canvas:
     def draw(self, dict: dict, peer):
         if peer not in self.colors.keys():
             self.colors[peer] = f"#{random.randint(0, 255):02x}{random.randint(0, 255):02x}{random.randint(0, 255):02x}"
-        
+
         x, y, hold = dict.values()
         if hold and peer in self.prev_point.keys():
             pre_x, pre_y = self.prev_point[peer]
@@ -32,7 +32,8 @@ class Canvas:
             self.prev_point[peer] = (x, y)
         elif not hold:
             self.prev_point[peer] = (x, y)
-            self.canvas.create_oval(x-5, y-5, x+5, y+5, fill=self.colors[peer], outline=self.colors[peer])
+            self.canvas.create_oval(
+                x-5, y-5, x+5, y+5, fill=self.colors[peer], outline=self.colors[peer])
 
     def erase(self, dict: dict):
         for item in self.canvas.find_overlapping(dict["x"]-10, dict["y"]-10, dict["x"]+10, dict["y"]+10):
@@ -52,7 +53,6 @@ class Canvas:
 
 
 net = Network("0.0.0.0", 5000)
-
 
 
 @net.on("connect")
@@ -77,9 +77,9 @@ if __name__ == "__main__":
     canvas = Canvas(net)
 
     if len(argv) == 1:
-        net.serve((True, False))
+        net.serve(tcp=False)
     else:
-        net.serve((False, True))
+        net.serve(udp=False)
 
     if len(argv) >= 3 and argv[1] == "-c":
         net.connect(argv[2], 5000)

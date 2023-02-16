@@ -35,14 +35,6 @@ impl Event {
         }
         Ok(())
     }
-
-    fn __repr__(&self, py: Python) -> PyResult<String> {
-        if let Some(callback) = &self.callback {
-            Ok(format!("Event({})", callback.getattr(py, "__name__")?))
-        } else {
-            Ok("Event(None)".to_string())
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -53,25 +45,31 @@ struct Message {
 
 struct ThreadMessage {
     event: String,
-    peer: Py<Peer>,
+    peer: Option<Py<Peer>>,
     data: String,
 }
 
 #[pyclass]
 struct Peer {
     #[pyo3(get)]
-    address: String,
+    name: String,
     events: HashMap<String, Py<Event>>,
-    write: RefCell<TcpStream>,
+    socket: RefCell<TcpStream>,
     tx: Sender<ThreadMessage>,
 }
 
 #[pymethods]
 impl Peer {
+    fn on(&mut self, py: Python, name: String) -> PyResult<Py<Event>> {
+        let event = Py::new(py, Event { callback: None })?;
+        self.events.insert(name, event.clone_ref(py));
+        Ok(event)
+    }
+
     fn emit(&self, event: String, data: String) -> PyResult<()> {
-        let mut message = serde_json::to_string(&Message { event, data }).unwrap();
-        message.push(char::from(0x4));
-        self.write.borrow_mut().write_all(message.as_bytes())?;
+        let mut buffer = serde_json::to_vec(&Message { event, data }).unwrap();
+        buffer.push(0x4);
+        self.socket.borrow_mut().write_all(&buffer)?;
         Ok(())
     }
 }
@@ -86,9 +84,9 @@ impl Peer {
         let peer = Py::new(
             py,
             Peer {
-                address,
+                name: address,
                 events: HashMap::new(),
-                write: RefCell::new(socket.try_clone()?),
+                socket: RefCell::new(socket.try_clone()?),
                 tx: tx.clone(),
             },
         )?;
@@ -97,8 +95,8 @@ impl Peer {
         thread::spawn(move || Self::listen(peer_clone, socket).unwrap());
 
         tx.send(ThreadMessage {
-            event: "new_peer".to_string(),
-            peer: peer.clone_ref(py),
+            event: "connect".to_string(),
+            peer: Some(peer.clone_ref(py)),
             data: "".to_string(),
         }).unwrap();
 
@@ -109,12 +107,17 @@ impl Peer {
         &self,
         py: Python,
         name: &str,
-        args: &PyTuple,
-        kwargs: Option<&PyDict>,
+        data: String,
     ) -> PyResult<()> {
+        let args = PyTuple::new(py, &[&data]);
         if let Some(event) = self.events.get(name) {
-            event.borrow(py).call(py, args, kwargs)?;
+            event.borrow(py).call(py, args, None)?;
         }
+        self.tx.send(ThreadMessage {
+            event: name.to_string(),
+            peer: None,
+            data,
+        }).unwrap();
         Ok(())
     }
 
@@ -128,8 +131,8 @@ impl Peer {
                 Python::with_gil(|py| {
                     peer.borrow(py).tx.send(
                         ThreadMessage {
-                            event: "peer_disconnect".to_string(),
-                            peer: peer.clone_ref(py),
+                            event: "disconnect".to_string(),
+                            peer: Some(peer.clone_ref(py)),
                             data: "".to_string(),
                         }
                     )
@@ -151,8 +154,7 @@ impl Peer {
         };
 
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[message.data]);
-            if let Err(e) = peer.borrow(py).trigger(py, &message.event, args, None) {
+            if let Err(e) = peer.borrow(py).trigger(py, &message.event, message.data) {
                 println!("Error: {}", e);
             }
         });
@@ -171,7 +173,7 @@ struct Network {
 #[pymethods]
 impl Network {
     #[new]
-    fn new(py: Python, ip: String, port: u16) -> PyResult<Self> {
+    fn new(ip: String, port: u16) -> PyResult<Self> {
         Ok(Self {
             ip,
             port,
@@ -187,28 +189,40 @@ impl Network {
         Ok(())
     }
 
+    fn on(&mut self, py: Python, name: String) -> PyResult<Py<Event>> {
+        let event = Py::new(py, Event { callback: None })?;
+        self.events.insert(name, event.clone_ref(py));
+        Ok(event)
+    }
+
     fn emit(&mut self, py: Python, event: String, data: String) -> PyResult<()> {
         self.peers
             .retain(|peer| peer.borrow(py).emit(event.clone(), data.clone()).is_ok());
         Ok(())
     }
 
-    fn serve(mut slf: PyRefMut<'_, Self>, py: Python) -> PyResult<()> {
+    #[pyo3(signature = (tcp = true, udp = true))]
+    fn serve(mut slf: PyRefMut<'_, Self>, py: Python, tcp: bool, udp: bool) -> PyResult<()> {
         let (tx, rx) = channel();
+        let ip = slf.ip.clone();
+        let port = slf.port;
         slf.tx = Some(tx.clone());
-        let slf: Py<Network> = slf.into();
+        let network: Py<Self> = slf.into();
+
         {
-            let slf = slf.clone_ref(py);
-            thread::spawn(move || Self::listen(slf, rx).unwrap());
+            let slf = network.clone_ref(py);
+            thread::spawn(move || Self::listen(slf, rx));
         };
-        {
-            let slf = slf.clone_ref(py);
-            thread::spawn(move || Self::tcp_server(slf, slf.borrow(py).ip.clone(), slf.borrow(py).port));
+        if tcp {
+            let slf = network.clone_ref(py);
+            let ip = ip.clone();
+            thread::spawn(move || Self::tcp_server(slf, ip, port));
         };
-        {
-            let slf = slf.clone_ref(py);
-            thread::spawn(move || Self::udp_server(slf, slf.borrow(py).ip.clone(), slf.borrow(py).port));
-        }
+        if udp {
+            let slf = network.clone_ref(py);
+            let ip = ip.clone();
+            thread::spawn(move || Self::udp_server(slf, ip, port));
+        };
 
         Ok(())
     }
@@ -216,6 +230,29 @@ impl Network {
 
 impl Network {
     fn listen(slf: Py<Self>, rx: Receiver<ThreadMessage>) -> PyResult<()> {
+        for message in rx {
+            Python::with_gil(|py| {
+                let mut slf = slf.borrow_mut(py);
+                match message.event.as_str() {
+                    "connection_request" => {
+                        let port = slf.port;
+                        slf.tcp_connect(py, message.data, port).unwrap();
+                    }
+                    "connect" | "disconnect" => {
+                        if let Some(event) = slf.events.get(&message.event) {
+                            let args = PyTuple::new(py, &[message.peer]);
+                            event.borrow(py).call(py, args, None).unwrap();
+                        }
+                    }
+                    _ => {
+                        if let Some(event) = slf.events.get(&message.event) {
+                            let args = PyTuple::new(py, &[message.data]);
+                            event.borrow(py).call(py, args, None).unwrap();
+                        }
+                    }
+                }
+            });
+        };
         Ok(())
     }
     fn tcp_connect(&mut self, py: Python, ip: String, port: u16) -> PyResult<()> {
@@ -246,7 +283,7 @@ impl Network {
                     py,
                     socket.peer_addr().unwrap().to_string(),
                     socket,
-                    slf.tx.as_ref().unwrap().clone(),
+                    slf.tx.clone().unwrap(),
                 ) {
                     slf.peers.push(peer);
                 } else {

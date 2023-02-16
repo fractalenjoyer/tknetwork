@@ -20,9 +20,9 @@ def disconnect(peer: Peer):
 
 if __name__ == "__main__":
     if len(argv) == 1:
-        network.serve((True, False))
+        network.serve(tcp=False)
     else:
-        network.serve((False, True))
+        network.serve(udp=False)
 
     if len(argv) >= 3 and argv[1] == "-c":
         network.connect(argv[2], 5000)
