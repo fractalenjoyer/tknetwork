@@ -8,8 +8,8 @@ network = Network("0.0.0.0", 5000)
 def connection(peer: Peer):
     print(f"\nPeer <{peer.name}> connected\n>> ", end="")
 
-    @peer.on("print")
-    def hello_name(data):
+    @peer.on("send")
+    def send(data):
         print(f"\n<{peer.name}>: {data}\n>> ", end="")
 
 
@@ -28,4 +28,4 @@ if __name__ == "__main__":
         network.connect(argv[2], 5000)
 
     while (i := input(">> ")) != "exit":
-        network.emit("print", i)
+        network.emit("send", i)
