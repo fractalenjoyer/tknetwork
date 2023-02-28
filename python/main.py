@@ -2,7 +2,7 @@ from tknetwork import Network, Peer
 import tkinter as tk
 from tkinter import colorchooser
 import random
-from sys import argv
+import argparse
 from json import dumps, loads
 
 
@@ -56,7 +56,15 @@ class Canvas:
         self.root.mainloop()
 
 
-net = Network("0.0.0.0", 5000)
+parser = argparse.ArgumentParser()
+parser.add_argument("-c", "--connect", help="connect to a peer",
+                    dest="address", metavar="ip:port", type=str)
+parser.add_argument("-p", "--port", help="port to use",
+                    type=int, dest="port", default=5000)
+args = parser.parse_args()
+
+
+net = Network("0.0.0.0", args.port)
 
 
 @net.on("connect")
@@ -81,12 +89,10 @@ def disconnect(peer):
 if __name__ == "__main__":
     canvas = Canvas(net)
 
-    if len(argv) == 1:
-        net.serve(tcp=False)
-    else:
-        net.serve(udp=False)
+    net.serve()
 
-    if len(argv) >= 3 and argv[1] == "-c":
-        net.connect(argv[2], 5000)
+    if args.address:
+        ip, port = args.address.split(":")
+        net.connect(ip, int(port))
 
     canvas.start()

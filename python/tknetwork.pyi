@@ -46,7 +46,7 @@ class Network:
 
         Parameters:
             ip (str): IP address of a peer in the network.
-            port (int): Port of the respective peer.
+            port (int): Port of the respective peer in the network.
         """
         ...
 

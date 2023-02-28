@@ -13,7 +13,7 @@ fn main() {
     let structs = Regex::new(r"#\[pyclass]\s*(?:\w\s+)*?(?:struct|enum)\s+([\w0-9]+)").unwrap();
 
     fs::write(dest_path, format!("#[pymodule]
-    fn {}(_py: Python, m: &PyModule) -> PyResult<()> {{\n", name)
+    fn {name}(_py: Python, m: &PyModule) -> PyResult<()> {{\n")
         + &functions
             .captures_iter(&source)
             .map(|f| format!(
