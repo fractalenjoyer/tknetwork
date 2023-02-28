@@ -12,7 +12,7 @@ fn main() {
     let functions = Regex::new(r"#\[pyfunction]\s*(?:\w\s+)*?fn\s+([\w0-9]+)").unwrap();
     let structs = Regex::new(r"#\[pyclass]\s*(?:\w\s+)*?(?:struct|enum)\s+([\w0-9]+)").unwrap();
 
-    fs::write(&dest_path, format!("#[pymodule]
+    fs::write(dest_path, format!("#[pymodule]
     fn {}(_py: Python, m: &PyModule) -> PyResult<()> {{\n", name)
         + &functions
             .captures_iter(&source)

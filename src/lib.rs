@@ -3,7 +3,6 @@ use pyo3::types::{PyDict, PyTuple};
 include!(concat!(env!("OUT_DIR"), "/module.rs"));
 
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -105,7 +104,7 @@ impl Peer {
     }
 
     fn trigger(&self, py: Python, name: &str, data: String) -> PyResult<()> {
-        let args = PyTuple::new(py, &[&data]);
+        let args = PyTuple::new(py, [&data]);
         if let Some(event) = self.events.get(name) {
             event.borrow(py).call(py, args, None)?;
         }
@@ -141,7 +140,7 @@ impl Peer {
     }
 
     fn decode_message(peer: &Py<Peer>, buffer: &[u8]) {
-        let message: Message = match serde_json::from_slice(&buffer) {
+        let message: Message = match serde_json::from_slice(buffer) {
             Ok(message) => message,
             Err(_) => {
                 println!("Error: Malformed packet");
@@ -202,7 +201,7 @@ impl Network {
         let (tx, rx) = channel();
         let ip = slf.ip.clone();
         let port = slf.port;
-        slf.tx = Some(tx.clone());
+        slf.tx = Some(tx);
         let network: Py<Self> = slf.into();
 
         {
@@ -216,7 +215,6 @@ impl Network {
         };
         if udp {
             let slf = network.clone_ref(py);
-            let ip = ip.clone();
             thread::spawn(move || Self::udp_server(slf, ip, port));
         };
 
